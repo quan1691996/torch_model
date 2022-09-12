@@ -150,5 +150,5 @@ def create_modules(blocks):
           
      return (net_info, module_list)
 
-blocks = parse_cfg("/home/quan1691996/torch_model/torch_model/YOLO/cfg/yolov3.cfg")
+blocks = parse_cfg("./torch_model/YOLO/cfg/yolov3.cfg")
 print(create_modules(blocks))
