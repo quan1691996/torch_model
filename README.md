@@ -32,10 +32,10 @@ sudo apt install x11-apps
 * enable Disable access control
 
 Test it\
-In wsl: enter xcalc - Calculator should open in Windows10\
+In wsl: enter xcalc - Calculator should open in Windows10
 
 If everything worked\
-And you want to persist the settings in your wsl distro. Store them in your ~/.bashrc.\
+And you want to persist the settings in your wsl distro. Store them in your ~/.bashrc.
 
 ```shell script
 sudo nano ~/.bashrc
@@ -50,6 +50,6 @@ Copy the two lines (from Set Display forward in WSL Distro - Configure Display),
 * Enter: shell:startup
 * Copy saved configuration: *.launch (Generated in step 2) to this folder (step 4)
 
-Now the XServer will be started with windows startup.\
+Now the XServer will be started with windows startup.
 
 follow this https://stackoverflow.com/a/63092879
