@@ -7,6 +7,7 @@ authors = ["ldquan1996 <luongdoanhquan1996@gmail.com>"]
 [tool.poetry.dependencies]
 python = "^3.10"
 black = "^22.8.0"
+pandas = "^1.4.4"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

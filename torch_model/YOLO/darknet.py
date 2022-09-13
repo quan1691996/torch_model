@@ -5,41 +5,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+import time
+import os
+import pandas  as pd
+import matplotlib.pyplot as plt
+from util import *
 
-def parse_cfg(cfgfile):
-     """
-     Takes a configuration file
+def parse_cfg(config_file):
+     file = open(config_file,'r')
+     file = file.read().split('\n')
+     file =  [line for line in file if len(line)>0 and line[0] != '#']
+     file = [line.lstrip().rstrip() for line in file]
 
-     Returns a list of blocks. Each blocks describes a block in the neural
-     network to be built. Block is represented as a dictionary in the list
+     final_list = []
+     element_dict = {}
+     for line in file:
 
-     """
-
-     file = open(cfgfile, 'r')
-     lines = file.read().split('\n')                        # store the lines in a list
-     lines = [x for x in lines if len(x) > 0]               # get read of the empty lines 
-     lines = [x for x in lines if x[0] != '#']              # get rid of comments
-     lines = [x.rstrip().lstrip() for x in lines]           # get rid of fringe whitespaces
-
-     block = {}
-     blocks = []
-
-     for line in lines:
-          if line[0] == "[":               # This marks the start of a new block
-               if len(block) != 0:          # If block is not empty, implies it is storing values of previous block.
-                    blocks.append(block)     # add it the blocks list
-                    block = {}               # re-init the block
-               block["type"] = line[1:-1].rstrip()     
+          if line[0] == '[':
+               if len(element_dict) != 0:     # appending the dict stored on previous iteration
+                         final_list.append(element_dict)
+                         element_dict = {} # again emtying dict
+               element_dict['type'] = ''.join([i for i in line if i != '[' and i != ']'])
+               
           else:
-               key,value = line.split("=") 
-               block[key.rstrip()] = value.lstrip()
-          blocks.append(block)
+               val = line.split('=')
+               element_dict[val[0].rstrip()] = val[1].lstrip()  #removing spaces on left and right side
+          
+     final_list.append(element_dict) # appending the values stored for last set
+     return final_list
 
-     return blocks
-
-class EmptyLayer(nn.Module):
+class DummyLayer(nn.Module):
     def __init__(self):
-        super(EmptyLayer, self).__init__()
+        super(DummyLayer, self).__init__()
         
 
 class DetectionLayer(nn.Module):
@@ -47,108 +44,398 @@ class DetectionLayer(nn.Module):
         super(DetectionLayer, self).__init__()
         self.anchors = anchors
 
-def create_modules(blocks):
-     net_info = blocks[0]     #Captures the information about the input and pre-processing    
-     module_list = nn.ModuleList()
-     filters = 0
-     prev_filters = 3
-     output_filters = []
+def create_model(blocks):
+#     blocks = parse_cfg(cfgfile)
+    darknet_details = blocks[0]
+    channels = 3 
+    output_filters = []
+    modulelist = nn.ModuleList()
+    
+    for i,block in enumerate(blocks[1:]):
+        seq = nn.Sequential()
+        if (block["type"] == "convolutional"):
+            activation = block["activation"]
+            filters = int(block["filters"])
+            kernel_size = int(block["size"])
+            strides = int(block["stride"])
+            use_bias= False if ("batch_normalize" in block) else True
+            pad = (kernel_size - 1) // 2
+            
+            conv = nn.Conv2d(in_channels=channels, out_channels=filters, kernel_size=kernel_size, 
+                             stride=strides, padding=pad, bias = use_bias)
+            seq.add_module("conv_{0}".format(i), conv)
+            
+            if "batch_normalize" in block:
+                bn = nn.BatchNorm2d(filters)
+                seq.add_module("batch_norm_{0}".format(i), bn)
 
-     for index, x in enumerate(blocks[1:]):
-          module = nn.Sequential()
+            if activation == "leaky":
+                activn = nn.LeakyReLU(0.1, inplace = True)
+                seq.add_module("leaky_{0}".format(i), activn)
+            
+        elif (block["type"] == "upsample"):
+            upsample = nn.Upsample(scale_factor = 2, mode = "bilinear")
+            seq.add_module("upsample_{}".format(i), upsample)
+        
+        elif (block["type"] == 'route'):
+            # start and end is given in format (eg:-1 36 so we will find layer number from it.
+            # we will find layer number in negative format
+            # so that we can get the number of filters in that layer
+            block['layers'] = block['layers'].split(',')
+            block['layers'][0] = int(block['layers'][0])
+            start = block['layers'][0]
+            if len(block['layers']) == 1:               
+                filters = output_filters[i + start]
+                       
+            
+            elif len(block['layers']) > 1:
+                block['layers'][1] = int(block['layers'][1]) - i 
+                end = block['layers'][1]
+                filters = output_filters[i + start] + output_filters[i + end]
+                  
+            
+            route = DummyLayer()
+            seq.add_module("route_{0}".format(i),route)
+                
+      
+        elif block["type"] == "shortcut":
+            from_ = int(block["from"])
+            shortcut = DummyLayer()
+            seq.add_module("shortcut_{0}".format(i),shortcut)
+            
+            
+        elif block["type"] == "yolo":
+            mask = block["mask"].split(",")
+            mask = [int(m) for m in mask]
+            anchors = block["anchors"].split(",")
+            anchors = [(int(anchors[i]), int(anchors[i + 1])) for i in range(0, len(anchors), 2)]
+            anchors = [anchors[i] for i in mask]
+            block["anchors"] = anchors
+            
+            detectorLayer = DetectionLayer(anchors)
+            seq.add_module("Detection_{0}".format(i),detectorLayer)
+                
+        modulelist.append(seq)
+        output_filters.append(filters)  
+        channels = filters
+    
+    return darknet_details, modulelist
 
-          #check the type of block
-          #create a new module for the block
-          #append to module_list
-          
-          #If it's a convolutional layer
-          if (x["type"] == "convolutional"):
-               #Get the info about the layer
-               activation = x["activation"]
-               try:
-                    batch_normalize = int(x["batch_normalize"])
-                    bias = False
-               except:
+class Darknet(nn.Module):
+    def __init__(self, cfgfile):
+        super(Darknet, self).__init__()
+        self.blocks = parse_cfg(cfgfile)
+        self.net_info, self.module_list = create_model(self.blocks)
+        
+    def forward(self, x, CUDA=False):
+        modules = self.blocks[1:]
+        outputs = {}   #We cache the outputs for the route layer
+        write = 0     #This is explained a bit later
+        for i, module in enumerate(modules):        
+            module_type = (module["type"])
+            if module_type == "convolutional" or module_type == "upsample":
+                x = self.module_list[i](x)
+                outputs[i] = x
+                
+            elif module_type == "route":
+                layers = module["layers"]
+                layers = [int(a) for a in layers]
+                if len(layers) == 1:
+                    x = outputs[i + layers[0]]
+                if len(layers) > 1:
+                    map1 = outputs[i + layers[0]]
+                    map2 = outputs[i + layers[1]]
+                    x = torch.cat((map1,map2),1)
+       
+                outputs[i] = x
+                
+            elif  module_type == "shortcut":
+                from_ = int(module["from"])
+
+                # just adding outputs for residual network
+                x = outputs[i-1] + outputs[i+from_]  
+                outputs[i] = x
+                
+            elif module_type == 'yolo':
+                anchors = self.module_list[i][0].anchors
+                
+                #Get the input dimensions
+                inp_dim = int(self.net_info["height"])
+                #Get the number of classes
+                num_classes = int(module["classes"])
+            
+                #Transform 
+                x = x.data   # get the data at that point
+                x = prediction(x,inp_dim,anchors,num_classes)
+                
+                if not write:              #if no collector has been intialised. 
+                    detections = x
+                    write = 1
+                else:       
+                    detections = torch.cat((detections, x), 1)
+
+                outputs[i] = outputs[i-1]
+                
+        try:
+            return detections   #return detections if present
+        except:
+            return 0
+     
+    def load_weights(self, weightfile):
+        
+        #Open the weights file
+        fp = open(weightfile, "rb")
+
+        #The first 4 values are header information 
+        # 1. Major version number
+        # 2. Minor Version Number
+        # 3. Subversion number 
+        # 4. IMages seen 
+        header = np.fromfile(fp, dtype = np.int32, count = 5)
+        self.header = torch.from_numpy(header)
+        self.seen = self.header[3]
+        
+        #The rest of the values are the weights
+        # Let's load them up
+        weights = np.fromfile(fp, dtype = np.float32)
+        
+        ptr = 0
+        for i in range(len(self.module_list)):
+            module_type = self.blocks[i + 1]["type"]
+            
+            if module_type == "convolutional":
+                model = self.module_list[i]
+                try:
+                    batch_normalize = int(self.blocks[i+1]["batch_normalize"])
+                except:
                     batch_normalize = 0
-                    bias = True
-          
-               filters= int(x["filters"])
-               padding = int(x["pad"])
-               kernel_size = int(x["size"])
-               stride = int(x["stride"])
-          
-               if padding:
-                    pad = (kernel_size - 1) // 2
-               else:
-                    pad = 0
-          
-               #Add the convolutional layer
-               conv = nn.Conv2d(prev_filters, filters, kernel_size, stride, pad, bias = bias)
-               module.add_module("conv_{0}".format(index), conv)
-          
-               #Add the Batch Norm Layer
-               if batch_normalize:
-                    bn = nn.BatchNorm2d(filters)
-                    module.add_module("batch_norm_{0}".format(index), bn)
-          
-               #Check the activation. 
-               #It is either Linear or a Leaky ReLU for YOLO
-               if activation == "leaky":
-                    activn = nn.LeakyReLU(0.1, inplace = True)
-                    module.add_module("leaky_{0}".format(index), activn)
-          
-               #If it's an upsampling layer
-               #We use Bilinear2dUpsampling
-          elif (x["type"] == "upsample"):
-               stride = int(x["stride"])
-               upsample = nn.Upsample(scale_factor = 2, mode = "nearest")
-               module.add_module("upsample_{}".format(index), upsample)
+                
+                conv = model[0]
+                
+                if (batch_normalize):
+                    bn = model[1]
                     
-          #If it is a route layer
-          elif (x["type"] == "route"):
-               x["layers_list"] = x["layers"].split(',')
-               #Start  of a route
-               start = int(x["layers_list"][0])
-               #end, if there exists one.
-               try:
-                    end = int(x["layers_list"][1])
-               except:
-                    end = 0
-               #Positive anotation
-               if start > 0: 
-                    start = start - index
-               if end > 0:
-                    end = end - index
-               route = EmptyLayer()
-               module.add_module("route_{0}".format(index), route)
-               if end < 0:
-                    filters = output_filters[index + start] + output_filters[index + end]
-               else:
-                    filters= output_filters[index + start]
+                    #Get the number of weights of Batch Norm Layer
+                    num_bn_biases = bn.bias.numel()
+                    
+                    #Load the weights
+                    bn_biases = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+                    ptr += num_bn_biases
+                    
+                    bn_weights = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr  += num_bn_biases
+                    
+                    bn_running_mean = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr  += num_bn_biases
+                    
+                    bn_running_var = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr  += num_bn_biases
+                    
+                    #Cast the loaded weights into dims of model weights. 
+                    bn_biases = bn_biases.view_as(bn.bias.data)
+                    bn_weights = bn_weights.view_as(bn.weight.data)
+                    bn_running_mean = bn_running_mean.view_as(bn.running_mean)
+                    bn_running_var = bn_running_var.view_as(bn.running_var)
 
-          #shortcut corresponds to skip connection
-          elif x["type"] == "shortcut":
-               shortcut = EmptyLayer()
-               module.add_module("shortcut_{}".format(index), shortcut)
-               
-          #Yolo is the detection layer
-          elif x["type"] == "yolo":
-               mask = x["mask"].split(",")
-               mask = [int(x) for x in mask]
+                    #Copy the data to model
+                    bn.bias.data.copy_(bn_biases)
+                    bn.weight.data.copy_(bn_weights)
+                    bn.running_mean.copy_(bn_running_mean)
+                    bn.running_var.copy_(bn_running_var)
+                
+                else:
+                    #Number of biases
+                    num_biases = conv.bias.numel()
+                
+                    #Load the weights
+                    conv_biases = torch.from_numpy(weights[ptr: ptr + num_biases])
+                    ptr = ptr + num_biases
+                    
+                    #reshape the loaded weights according to the dims of the model weights
+                    conv_biases = conv_biases.view_as(conv.bias.data)
+                    
+                    #Finally copy the data
+                    conv.bias.data.copy_(conv_biases)
+                    
+                    
+                #Let us load the weights for the Convolutional layers
+                num_weights = conv.weight.numel()
+                
+                #Do the same as above for weights
+                conv_weights = torch.from_numpy(weights[ptr:ptr+num_weights])
+                ptr = ptr + num_weights
 
-               anchors = x["anchors"].split(",")
-               anchors = [int(a) for a in anchors]
-               anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors),2)]
-               anchors = [anchors[i] for i in mask]
+                conv_weights = conv_weights.view_as(conv.weight.data)
+                conv.weight.data.copy_(conv_weights)
+                # Note: we dont have bias for conv when batch normalization is there
 
-               detection = DetectionLayer(anchors)
-               module.add_module("Detection_{}".format(index), detection)
-                              
-          module_list.append(module)
-          prev_filters = filters
-          output_filters.append(filters)
-          
-     return (net_info, module_list)
+def get_test_input():
+     img = cv2.imread("./torch_model/YOLO/dog-cycle-car.png")
+     img = cv2.resize(img, (416,416))  # Resize image to 416 416
+     img_ = img[:,:,::-1].transpose((2,0,1))  # BGR -> RGB | H X W C -> C X H X W 
+     img_ = img_[np.newaxis,:,:,:]/255.0      # Add a channel at 0 (for batch) | Normalise
+     img_ = torch.from_numpy(img_).float()    # Convert to float
+     return img_
 
-blocks = parse_cfg("./torch_model/YOLO/cfg/yolov3.cfg")
-print(create_modules(blocks))
+CUDA = False
+batch_size = 2
+#Set up the neural network
+print("Loading network.....")
+model = Darknet("./torch_model/YOLO/cfg/yolov3.cfg")
+model.load_weights("./torch_model/YOLO/cfg/yolov3.weights")
+print("Network successfully loaded")
+classes = load_classes("./torch_model/YOLO/cfg/coco.names")
+print('Classes loaded')
+inp_dim = int(model.net_info["height"])
+assert inp_dim % 32 == 0 
+assert inp_dim > 32
+
+#If there's a GPU availible, put the model on GPU
+if CUDA:
+    model.cuda()
+
+#Set the model in evaluation mode
+model.eval()
+
+
+# read images from folder 'images' or direcly  image
+read_dir = time.time()
+#Detection phase
+try:
+    imlist = [os.path.join(os.path.realpath('.'), "./torch_model/YOLO/data/input", img) for img in os.listdir("./torch_model/YOLO/data/input")]
+except NotADirectoryError:
+    imlist = []
+    imlist.append(os.path.join(os.path.realpath('.'), "./torch_model/YOLO/data/input"))
+except FileNotFoundError:
+    print ("No file or directory with the name {}".format("./torch_model/YOLO/data/input"))
+    exit()
+    
+if not os.path.exists("./torch_model/data/YOLO/output"):
+    os.makedirs("./torch_model/data/YOLO/output")
+    
+load_batch = time.time()
+
+# preparing list of loaded images
+# [[image,original_image,dim[0],dim[1]]]
+batches = list(map(prep_image, imlist, [inp_dim for x in range(len(imlist))]))
+im_batches = [x[0] for x in batches] # list of resized images
+orig_ims = [x[1] for x in batches] # list of original images
+im_dim_list = [x[2] for x in batches] # dimension list
+im_dim_list = torch.FloatTensor(im_dim_list).repeat(1,2) #repeating twice
+    
+    
+if CUDA:
+    im_dim_list = im_dim_list.cuda()
+
+    
+# converting image to batches    
+reminder = 0
+if (len(im_dim_list) % batch_size): #if reminder is there, reminder = 1
+    reminder = 1
+
+if batch_size != 1:
+    num_batches = len(imlist) // batch_size + reminder            
+    im_batches = [torch.cat((im_batches[i*batch_size : min((i +  1)*batch_size,len(im_batches))])) 
+                 for i in range(num_batches)] 
+    
+nms_thesh = 0.5
+i = 0
+write = False
+    
+objs = {}    
+for batch in im_batches:
+        #load the image 
+        start = time.time()
+        if CUDA:
+            batch = batch.cuda()       
+        #Apply offsets to the result predictions
+        #Tranform the predictions as described in the YOLO paper
+        #flatten the prediction vector 
+        # B x (bbox cord x no. of anchors) x grid_w x grid_h --> B x bbox x (all the boxes) 
+        # Put every proposed box as a row.
+        with torch.no_grad():
+            prediction = model(Variable(batch), CUDA)
+        
+        prediction = write_results(prediction, confidence=0.5, num_classes=80, nms_conf = nms_thesh)
+        
+        if type(prediction) == int:
+            i += 1
+            continue
+
+
+        prediction[:,0] += i*batch_size
+                  
+        if not write:
+            output = prediction
+            write = 1
+        else:
+            output = torch.cat((output,prediction))  # concating predictions from each batch
+        i += 1
+        
+        if CUDA:
+            torch.cuda.synchronize()
+    
+try:
+    output
+except NameError:
+    print("No detections were made")
+    exit()
+
+    
+#Before we draw the bounding boxes, the predictions contained in our output tensor 
+#are predictions on the padded image, and not the original image. Merely, re-scaling them 
+#to the dimensions of the input image won't work here. We first need to transform the
+#co-ordinates of the boxes to be measured with respect to boundaries of the area on the
+#padded image that contains the original image
+
+
+im_dim_list = torch.index_select(im_dim_list, 0, output[:,0].long())
+scaling_factor = torch.min(inp_dim/im_dim_list,1)[0].view(-1,1)
+output[:,[1,3]] -= (inp_dim - scaling_factor*im_dim_list[:,0].view(-1,1))/2
+output[:,[2,4]] -= (inp_dim - scaling_factor*im_dim_list[:,1].view(-1,1))/2
+output[:,1:5] /= scaling_factor
+    
+for i in range(output.shape[0]):
+    output[i, [1,3]] = torch.clamp(output[i, [1,3]], 0.0, im_dim_list[i,0])
+    output[i, [2,4]] = torch.clamp(output[i, [2,4]], 0.0, im_dim_list[i,1])
+
+def write(x, batches, results):
+    c1 = tuple(x[1:3].int())
+    c2 = tuple(x[3:5].int())
+    img = results[int(x[0])]
+    cls = int(x[-1])
+    label = "{0}".format(classes[cls])
+    color = (0,0,255)
+    cv2.rectangle(img, (int(c1[0]), int(c1[1])), (int(c2[0]), int(c2[1])), color, 2)
+    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
+    c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
+    cv2.rectangle(img, (int(c1[0]), int(c1[1])), (int(c2[0]), int(c2[1])) ,color, -1)
+    # cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1)
+    return img
+
+list(map(lambda x: write(x, im_batches, orig_ims), output))
+      
+det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format("./torch_model/YOLO/data/output",x.split("/")[-1]))
+
+list(map(cv2.imwrite, det_names, orig_ims))
+
+torch.cuda.empty_cache()
+
+img = cv2.imread('./torch_model/YOLO/data/input/dog-cycle-car.png') 
+img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+plt.figure(figsize=(20,10))
+plt.imshow(img)
+
+img = cv2.imread('./torch_model/YOLO/data/input/office.jpg') 
+img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+plt.figure(figsize=(20,10))
+plt.imshow(img)
+
+# blocks = parse_cfg("./torch_model/YOLO/cfg/yolov3.cfg")
+# print(create_model(blocks))
+
+# model = Darknet("./torch_model/YOLO/cfg/yolov3.cfg")
+# model.eval()
+# inp = get_test_input()
+# pred = model(inp, False)
+# print (pred)
