@@ -421,15 +421,17 @@ list(map(cv2.imwrite, det_names, orig_ims))
 
 torch.cuda.empty_cache()
 
-img = cv2.imread('./torch_model/YOLO/data/input/dog-cycle-car.png') 
+img = cv2.imread('./torch_model/YOLO/data/output/det_dog-cycle-car.png') 
 img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
 plt.figure(figsize=(20,10))
 plt.imshow(img)
 
-img = cv2.imread('./torch_model/YOLO/data/input/office.jpg') 
+img = cv2.imread('./torch_model/YOLO/data/output/det_office.jpg') 
 img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
 plt.figure(figsize=(20,10))
 plt.imshow(img)
+
+plt.show()
 
 # blocks = parse_cfg("./torch_model/YOLO/cfg/yolov3.cfg")
 # print(create_model(blocks))
