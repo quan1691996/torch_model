@@ -5,7 +5,7 @@ XServer Windows - WSL1 & WSL2:
 Install X-Server Windows
 https://sourceforge.net/projects/vcxsrv/
 
-Set Display forward in WSL Distro
+Set Display forward in WSL Distro\
 Configure Display:
 
 If you running WSL1:
@@ -25,27 +25,30 @@ and then (install x11-apps):
 sudo apt update
 sudo apt install x11-apps
 ```
-Start XLaunch on Windows
-Multiple Windows
-Start no client
-disable Native opengl
-enable Disable access control
+Start XLaunch on Windows\
+Multiple Windows\
+Start no client\
+disable Native opengl\
+enable Disable access control\
+\
+Test it\
+In wsl: enter xcalc - Calculator should open in Windows10\
+\
+If everything worked\
+And you want to persist the settings in your wsl distro. Store them in your ~/.bashrc.\
 
-Test it
-In wsl: enter xcalc - Calculator should open in Windows10
-
-If everything worked
-And you want to persist the settings in your wsl distro. Store them in your ~/.bashrc.
-
+```shell script
 sudo nano ~/.bashrc
-Copy the two lines (from Set Display forward in WSL Distro - Configure Display), two the end and save it.
+```
 
-Add it to autostart
-Run Dialog see Start XLaunch on Windows
-Save configuration
-Press Windows + R
-Enter: shell:startup
-Copy saved configuration: *.launch (Generated in step 2) to this folder (step 4)
-Now the XServer will be started with windows startup.
-
+Copy the two lines (from Set Display forward in WSL Distro - Configure Display), two the end and save it.\
+\
+Add it to autostart\
+Run Dialog see Start XLaunch on Windows\
+Save configuration\
+Press Windows + R\
+Enter: shell:startup\
+Copy saved configuration: *.launch (Generated in step 2) to this folder (step 4)\
+Now the XServer will be started with windows startup.\
+\
 follow this https://stackoverflow.com/a/63092879
