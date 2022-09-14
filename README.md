@@ -82,3 +82,5 @@ If not, run (<Distribution Name> is your targted distro)
 ``` shell script
 wsl --set-default <Distribution Name>
 ```
+## Setting Camera
+Follow this link: https://zenn.dev/pinto0309/articles/e1432253d29e30
