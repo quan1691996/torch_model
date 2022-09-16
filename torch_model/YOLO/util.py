@@ -76,6 +76,19 @@ def prep_image(img, inp_dim):
     img_ = torch.from_numpy(img_).float().div(255.0).unsqueeze(0)
     return img_, orig_im, dim
 
+# function converting images from opencv format to torch format
+def prep_image_video(orig_im, inp_dim):
+    """
+    Prepare image for inputting to the neural network. 
+    
+    Returns a Variable 
+    """
+    dim = orig_im.shape[1], orig_im.shape[0]
+    img = (letterbox_image(orig_im, (inp_dim, inp_dim)))
+    img_ = img[:,:,::-1].transpose((2,0,1)).copy()
+    img_ = torch.from_numpy(img_).float().div(255.0).unsqueeze(0)
+    return img_, orig_im, dim
+
 #function letterbox_image that resizes our image, keeping the 
 # aspect ratio consistent, and padding the left out areas with the color (128,128,128)
 def letterbox_image(img, inp_dim):

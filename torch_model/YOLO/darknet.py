@@ -277,6 +277,7 @@ def get_test_input():
      img_ = torch.from_numpy(img_).float()    # Convert to float
      return img_
 
+# CUDA = torch.cuda.is_available()
 CUDA = False
 batch_size = 2
 #Set up the neural network
@@ -354,22 +355,22 @@ for batch in im_batches:
         # B x (bbox cord x no. of anchors) x grid_w x grid_h --> B x bbox x (all the boxes) 
         # Put every proposed box as a row.
         with torch.no_grad():
-            prediction = model(Variable(batch), CUDA)
+            predictions = model(Variable(batch), CUDA)
         
-        prediction = write_results(prediction, confidence=0.5, num_classes=80, nms_conf = nms_thesh)
+        predictions = write_results(predictions, confidence=0.5, num_classes=80, nms_conf = nms_thesh)
         
         if type(prediction) == int:
             i += 1
             continue
 
 
-        prediction[:,0] += i*batch_size
+        predictions[:,0] += i*batch_size
                   
         if not write:
-            output = prediction
+            output = predictions
             write = 1
         else:
-            output = torch.cat((output,prediction))  # concating predictions from each batch
+            output = torch.cat((output,predictions))  # concating predictions from each batch
         i += 1
         
         if CUDA:
@@ -399,9 +400,9 @@ for i in range(output.shape[0]):
     output[i, [1,3]] = torch.clamp(output[i, [1,3]], 0.0, im_dim_list[i,0])
     output[i, [2,4]] = torch.clamp(output[i, [2,4]], 0.0, im_dim_list[i,1])
 
-def write(x, batches, results):
-    c1 = tuple(x[1:3].int())
-    c2 = tuple(x[3:5].int())
+def write_image(x, batches, results):
+    c1 = tuple(x[1:3])
+    c2 = tuple(x[3:5])
     img = results[int(x[0])]
     cls = int(x[-1])
     label = "{0}".format(classes[cls])
@@ -413,7 +414,7 @@ def write(x, batches, results):
     cv2.putText(img, label, (int(c1[0]), int(c1[1]) + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1)
     return img
 
-list(map(lambda x: write(x, im_batches, orig_ims), output))
+list(map(lambda x: write_image(x, im_batches, orig_ims), output))
       
 det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format("./torch_model/YOLO/data/output",x.split("/")[-1]))
 
@@ -432,12 +433,3 @@ plt.figure(figsize=(20,10))
 plt.imshow(img)
 
 plt.show()
-
-# blocks = parse_cfg("./torch_model/YOLO/cfg/yolov3.cfg")
-# print(create_model(blocks))
-
-# model = Darknet("./torch_model/YOLO/cfg/yolov3.cfg")
-# model.eval()
-# inp = get_test_input()
-# pred = model(inp, False)
-# print (pred)
