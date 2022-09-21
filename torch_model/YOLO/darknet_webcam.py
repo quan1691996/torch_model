@@ -166,7 +166,7 @@ class Darknet(nn.Module):
             
                 #Transform 
                 x = x.data   # get the data at that point
-                x = prediction(x,inp_dim,anchors,num_classes)
+                x = prediction(x,inp_dim,anchors,num_classes,CUDA)
                 
                 if not write:              #if no collector has been intialised. 
                     detections = x
@@ -269,9 +269,7 @@ class Darknet(nn.Module):
                 conv.weight.data.copy_(conv_weights)
                 # Note: we dont have bias for conv when batch normalization is there
 
-# CUDA = torch.cuda.is_available()
-CUDA = False
-batch_size = 2
+CUDA = torch.cuda.is_available()
 #Set up the neural network
 print("Loading network.....")
 model = Darknet("./torch_model/YOLO/cfg/yolov3.cfg")
@@ -322,6 +320,7 @@ while True:
         im_batches = [im_batches] # list of resized images
         orig_ims = [orig_ims] # list of original images
         im_dim_list = [im_dim_list] # dimension list
+        im_dim_list = torch.FloatTensor(im_dim_list).repeat(1,2)
         
             
         if CUDA:
@@ -334,7 +333,7 @@ while True:
             reminder = 1
 
         if batch_size != 1:
-            num_batches = len(imlist) // batch_size + reminder            
+            num_batches = 1 // batch_size + reminder            
             im_batches = [torch.cat((im_batches[i*batch_size : min((i +  1)*batch_size,len(im_batches))])) 
                         for i in range(num_batches)] 
             
@@ -388,7 +387,6 @@ while True:
         #co-ordinates of the boxes to be measured with respect to boundaries of the area on the
         #padded image that contains the original image
 
-        im_dim_list = torch.FloatTensor(im_dim_list).repeat(output_cam.size(0), 1)
         im_dim_list = torch.index_select(im_dim_list, 0, output_cam[:,0].long())
         scaling_factor = torch.min(inp_dim/im_dim_list,1)[0].view(-1,1)
         output_cam[:,[1,3]] -= (inp_dim - scaling_factor*im_dim_list[:,0].view(-1,1))/2
