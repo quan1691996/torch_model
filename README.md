@@ -88,6 +88,6 @@ Follow this link: https://zenn.dev/pinto0309/articles/e1432253d29e30
 ## Node
 When restart your wsl, setting usb port again to run the program. And modify permission of /dev/video*.
 
-'''
+``` shell script
 sudo chmod 777 /dev/video*
-'''
+```
