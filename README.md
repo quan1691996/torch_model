@@ -83,6 +83,12 @@ If not, run (<Distribution Name> is your targted distro)
 wsl --set-default <Distribution Name>
 ```
 ## Setting Camera
+* Attach camera to WSL
+* check if /dev/video* is available
+* If it is available, change folder permission by: 
+``` shell script
+sudo chmod 777 /dev/video*
+```
 Follow this link: https://zenn.dev/pinto0309/articles/e1432253d29e30
 
 ## Node
